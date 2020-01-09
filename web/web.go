@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/micro/go-micro/api"
 )
 
 // Service is a web service with service discovery built in
@@ -14,8 +15,8 @@ type Service interface {
 	Client() *http.Client
 	Init(opts ...Option) error
 	Options() Options
-	Handle(pattern string, handler http.Handler)
-	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
+	Handle(pattern string, handler http.Handler, endpoints ...*api.Endpoint)
+	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request), endpoints ...*api.Endpoint)
 	Run() error
 }
 

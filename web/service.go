@@ -16,6 +16,7 @@ import (
 
 	"github.com/micro/cli"
 	"github.com/micro/go-micro"
+	"github.com/micro/go-micro/api"
 	"github.com/micro/go-micro/registry"
 	maddr "github.com/micro/go-micro/util/addr"
 	mhttp "github.com/micro/go-micro/util/http"
@@ -268,7 +269,7 @@ func (s *service) Client() *http.Client {
 	}
 }
 
-func (s *service) Handle(pattern string, handler http.Handler) {
+func (s *service) Handle(pattern string, handler http.Handler, endpoints ...*api.Endpoint) {
 	var seen bool
 	for _, ep := range s.srv.Endpoints {
 		if ep.Name == pattern {
@@ -279,9 +280,19 @@ func (s *service) Handle(pattern string, handler http.Handler) {
 
 	// if its unseen then add an endpoint
 	if !seen {
-		s.srv.Endpoints = append(s.srv.Endpoints, &registry.Endpoint{
-			Name: pattern,
-		})
+		if len(endpoints) > 0 {
+			for _, e := range endpoints {
+				s.srv.Endpoints = append(s.srv.Endpoints, &registry.Endpoint{
+					Name:     pattern,
+					Metadata: api.Encode(e),
+				})
+			}
+
+		} else {
+			s.srv.Endpoints = append(s.srv.Endpoints, &registry.Endpoint{
+				Name: pattern,
+			})
+		}
 	}
 
 	// disable static serving
@@ -295,7 +306,7 @@ func (s *service) Handle(pattern string, handler http.Handler) {
 	s.mux.Handle(pattern, handler)
 }
 
-func (s *service) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+func (s *service) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request), endpoints ...*api.Endpoint) {
 	var seen bool
 	for _, ep := range s.srv.Endpoints {
 		if ep.Name == pattern {
@@ -304,9 +315,19 @@ func (s *service) HandleFunc(pattern string, handler func(http.ResponseWriter, *
 		}
 	}
 	if !seen {
-		s.srv.Endpoints = append(s.srv.Endpoints, &registry.Endpoint{
-			Name: pattern,
-		})
+		if len(endpoints) > 0 {
+			for _, e := range endpoints {
+				s.srv.Endpoints = append(s.srv.Endpoints, &registry.Endpoint{
+					Name:     pattern,
+					Metadata: api.Encode(e),
+				})
+			}
+
+		} else {
+			s.srv.Endpoints = append(s.srv.Endpoints, &registry.Endpoint{
+				Name: pattern,
+			})
+		}
 	}
 
 	s.mux.HandleFunc(pattern, handler)
