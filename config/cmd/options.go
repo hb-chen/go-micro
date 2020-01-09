@@ -7,7 +7,9 @@ import (
 	"github.com/micro/go-micro/client"
 	"github.com/micro/go-micro/client/selector"
 	"github.com/micro/go-micro/registry"
+	"github.com/micro/go-micro/runtime"
 	"github.com/micro/go-micro/server"
+	"github.com/micro/go-micro/store"
 	"github.com/micro/go-micro/transport"
 )
 
@@ -24,6 +26,8 @@ type Options struct {
 	Transport *transport.Transport
 	Client    *client.Client
 	Server    *server.Server
+	Runtime   *runtime.Runtime
+	Store     *store.Store
 
 	Brokers    map[string]func(...broker.Option) broker.Broker
 	Clients    map[string]func(...client.Option) client.Client
@@ -31,6 +35,8 @@ type Options struct {
 	Selectors  map[string]func(...selector.Option) selector.Selector
 	Servers    map[string]func(...server.Option) server.Server
 	Transports map[string]func(...transport.Option) transport.Transport
+	Runtimes   map[string]func(...runtime.Option) runtime.Runtime
+	Stores     map[string]func(...store.Option) store.Store
 
 	// Other options for implementations of the interface
 	// can be stored in a context
@@ -133,5 +139,12 @@ func NewServer(name string, s func(...server.Option) server.Server) Option {
 func NewTransport(name string, t func(...transport.Option) transport.Transport) Option {
 	return func(o *Options) {
 		o.Transports[name] = t
+	}
+}
+
+// New runtime func
+func NewRuntime(name string, r func(...runtime.Option) runtime.Runtime) Option {
+	return func(o *Options) {
+		o.Runtimes[name] = r
 	}
 }

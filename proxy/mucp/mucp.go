@@ -14,7 +14,6 @@ import (
 	"github.com/micro/go-micro/client/selector"
 	"github.com/micro/go-micro/codec"
 	"github.com/micro/go-micro/codec/bytes"
-	"github.com/micro/go-micro/config/options"
 	"github.com/micro/go-micro/errors"
 	"github.com/micro/go-micro/metadata"
 	"github.com/micro/go-micro/proxy"
@@ -27,7 +26,7 @@ import (
 // If no endpoint is specified it will call a service using the client.
 type Proxy struct {
 	// embed options
-	options.Options
+	options proxy.Options
 
 	// Endpoint specifies the fixed service endpoint to call.
 	Endpoint string
@@ -83,7 +82,8 @@ func readLoop(r server.Request, s client.Stream) error {
 
 // toNodes returns a list of node addresses from given routes
 func toNodes(routes []router.Route) []string {
-	var nodes []string
+	nodes := make([]string, 0, len(routes))
+
 	for _, node := range routes {
 		address := node.Address
 		if len(node.Gateway) > 0 {
@@ -91,11 +91,13 @@ func toNodes(routes []router.Route) []string {
 		}
 		nodes = append(nodes, address)
 	}
+
 	return nodes
 }
 
 func toSlice(r map[uint64]router.Route) []router.Route {
-	var routes []router.Route
+	routes := make([]router.Route, 0, len(r))
+
 	for _, v := range r {
 		routes = append(routes, v)
 	}
@@ -112,6 +114,7 @@ func (p *Proxy) filterRoutes(ctx context.Context, routes []router.Route) []route
 		return routes
 	}
 
+	//nolint:prealloc
 	var filteredRoutes []router.Route
 
 	// filter the routes based on our headers
@@ -159,6 +162,8 @@ func (p *Proxy) filterRoutes(ctx context.Context, routes []router.Route) []route
 		// passed the filter checks
 		filteredRoutes = append(filteredRoutes, route)
 	}
+
+	log.Tracef("Proxy filtered routes %+v\n", filteredRoutes)
 
 	return filteredRoutes
 }
@@ -224,13 +229,15 @@ func (p *Proxy) cacheRoutes(service string) ([]router.Route, error) {
 // refreshMetrics will refresh any metrics for our local cached routes.
 // we may not receive new watch events for these as they change.
 func (p *Proxy) refreshMetrics() {
-	var services []string
-
 	// get a list of services to update
 	p.RLock()
+
+	services := make([]string, 0, len(p.Routes))
+
 	for service := range p.Routes {
 		services = append(services, service)
 	}
+
 	p.RUnlock()
 
 	// get and cache the routes for the service
@@ -245,6 +252,8 @@ func (p *Proxy) manageRoutes(route router.Route, action string) error {
 	p.Lock()
 	defer p.Unlock()
 
+	log.Tracef("Proxy taking route action %v %+v\n", action, route)
+
 	switch action {
 	case "create", "update":
 		if _, ok := p.Routes[route.Service]; !ok {
@@ -252,7 +261,12 @@ func (p *Proxy) manageRoutes(route router.Route, action string) error {
 		}
 		p.Routes[route.Service][route.Hash()] = route
 	case "delete":
+		// delete that specific route
 		delete(p.Routes[route.Service], route.Hash())
+		// clean up the cache entirely
+		if len(p.Routes[route.Service]) == 0 {
+			delete(p.Routes, route.Service)
+		}
 	default:
 		return fmt.Errorf("unknown action: %s", action)
 	}
@@ -274,15 +288,41 @@ func (p *Proxy) watchRoutes() {
 			return
 		}
 
-		if err := p.manageRoutes(event.Route, fmt.Sprintf("%s", event.Type)); err != nil {
+		if err := p.manageRoutes(event.Route, event.Type.String()); err != nil {
 			// TODO: should we bail here?
 			continue
 		}
 	}
 }
 
-func (p *Proxy) SendRequest(ctx context.Context, req client.Request, rsp client.Response) error {
-	return errors.InternalServerError("go.micro.proxy", "SendRequest is unsupported")
+// ProcessMessage acts as a message exchange and forwards messages to ongoing topics
+// TODO: should we look at p.Endpoint and only send to the local endpoint? probably
+func (p *Proxy) ProcessMessage(ctx context.Context, msg server.Message) error {
+	// TODO: check that we're not broadcast storming by sending to the same topic
+	// that we're actually subscribed to
+
+	log.Tracef("Proxy received message for %s", msg.Topic())
+
+	var errors []string
+
+	// directly publish to the local client
+	if err := p.Client.Publish(ctx, msg); err != nil {
+		errors = append(errors, err.Error())
+	}
+
+	// publish to all links
+	for _, client := range p.Links {
+		if err := client.Publish(ctx, msg); err != nil {
+			errors = append(errors, err.Error())
+		}
+	}
+
+	if len(errors) == 0 {
+		return nil
+	}
+
+	// there is no error...muahaha
+	return fmt.Errorf("Message processing error: %s", strings.Join(errors, "\n"))
 }
 
 // ServeRequest honours the server.Router interface
@@ -301,6 +341,8 @@ func (p *Proxy) ServeRequest(ctx context.Context, req server.Request, rsp server
 	if len(service) == 0 {
 		return errors.BadRequest("go.micro.proxy", "service name is blank")
 	}
+
+	log.Tracef("Proxy received request for %s", service)
 
 	// are we network routing or local routing
 	if len(p.Links) == 0 {
@@ -333,15 +375,18 @@ func (p *Proxy) ServeRequest(ctx context.Context, req server.Request, rsp server
 		routes = addr
 	}
 
-	var opts []client.CallOption
-
-	// set strategy to round robin
-	opts = append(opts, client.WithSelectOption(selector.WithStrategy(selector.RoundRobin)))
+	//nolint:prealloc
+	opts := []client.CallOption{
+		// set strategy to round robin
+		client.WithSelectOption(selector.WithStrategy(selector.RoundRobin)),
+	}
 
 	// if the address is already set just serve it
 	// TODO: figure it out if we should know to pick a link
 	if len(addresses) > 0 {
-		opts = append(opts, client.WithAddress(addresses...))
+		opts = append(opts,
+			client.WithAddress(addresses...),
+		)
 
 		// serve the normal way
 		return p.serveRequest(ctx, p.Client, service, endpoint, req, rsp, opts...)
@@ -353,12 +398,18 @@ func (p *Proxy) ServeRequest(ctx context.Context, req server.Request, rsp server
 
 		// set address if available via routes or specific endpoint
 		if len(routes) > 0 {
-			addresses := toNodes(routes)
+			addresses = toNodes(routes)
 			opts = append(opts, client.WithAddress(addresses...))
 		}
 
+		log.Tracef("Proxy calling %+v\n", addresses)
 		// serve the normal way
 		return p.serveRequest(ctx, p.Client, service, endpoint, req, rsp, opts...)
+	}
+
+	// we're assuming we need routes to operate on
+	if len(routes) == 0 {
+		return errors.InternalServerError("go.micro.proxy", "route not found")
 	}
 
 	var gerr error
@@ -374,11 +425,16 @@ func (p *Proxy) ServeRequest(ctx context.Context, req server.Request, rsp server
 			continue
 		}
 
-		log.Debugf("Proxy using route %+v\n", route)
+		log.Tracef("Proxy using route %+v\n", route)
 
 		// set the address to call
 		addresses := toNodes([]router.Route{route})
-		opts = append(opts, client.WithAddress(addresses...))
+		// set the address in the options
+		// disable retries since its one route processing
+		opts = append(opts,
+			client.WithAddress(addresses...),
+			client.WithRetries(0),
+		)
 
 		// do the request with the link
 		gerr = p.serveRequest(ctx, link, service, endpoint, req, rsp, opts...)
@@ -407,7 +463,7 @@ func (p *Proxy) serveRequest(ctx context.Context, link client.Client, service, e
 	}
 
 	// create new request with raw bytes body
-	creq := link.NewRequest(service, endpoint, &bytes.Frame{body}, client.WithContentType(req.ContentType()))
+	creq := link.NewRequest(service, endpoint, &bytes.Frame{Data: body}, client.WithContentType(req.ContentType()))
 
 	// not a stream so make a client.Call request
 	if !req.Stream() {
@@ -432,6 +488,26 @@ func (p *Proxy) serveRequest(ctx context.Context, link client.Client, service, e
 		return err
 	}
 	defer stream.Close()
+
+	// if we receive a grpc stream we have to refire the initial request
+	c, ok := req.Codec().(codec.Codec)
+	if ok && c.String() == "grpc" && link.String() == "grpc" {
+		// get the header from client
+		hdr := req.Header()
+		msg := &codec.Message{
+			Type:   codec.Request,
+			Header: hdr,
+			Body:   body,
+		}
+
+		// write the raw request
+		err = stream.Request().Codec().Write(msg, nil)
+		if err == io.EOF {
+			return nil
+		} else if err != nil {
+			return err
+		}
+	}
 
 	// create client request read loop if streaming
 	go readLoop(req, stream)
@@ -463,61 +539,52 @@ func (p *Proxy) serveRequest(ctx context.Context, link client.Client, service, e
 			return err
 		}
 	}
+}
 
-	return nil
+func (p *Proxy) String() string {
+	return "mucp"
 }
 
 // NewSingleHostProxy returns a proxy which sends requests to a single backend
 func NewSingleHostProxy(endpoint string) *Proxy {
 	return &Proxy{
-		Options:  options.NewOptions(),
 		Endpoint: endpoint,
 	}
 }
 
 // NewProxy returns a new proxy which will route based on mucp headers
-func NewProxy(opts ...options.Option) proxy.Proxy {
+func NewProxy(opts ...proxy.Option) proxy.Proxy {
+	var options proxy.Options
+	for _, o := range opts {
+		o(&options)
+	}
+
 	p := new(Proxy)
 	p.Links = map[string]client.Client{}
-	p.Options = options.NewOptions(opts...)
-	p.Options.Init(options.WithString("mucp"))
+	p.Routes = make(map[string]map[uint64]router.Route)
+	p.options = options
 
 	// get endpoint
-	ep, ok := p.Options.Values().Get("proxy.endpoint")
-	if ok {
-		p.Endpoint = ep.(string)
-	}
-
-	// get client
-	c, ok := p.Options.Values().Get("proxy.client")
-	if ok {
-		p.Client = c.(client.Client)
-	}
+	p.Endpoint = options.Endpoint
+	// set the client
+	p.Client = options.Client
+	// get router
+	p.Router = options.Router
 
 	// set the default client
 	if p.Client == nil {
 		p.Client = client.DefaultClient
 	}
 
-	// get client
-	links, ok := p.Options.Values().Get("proxy.links")
-	if ok {
-		p.Links = links.(map[string]client.Client)
-	}
-
-	// get router
-	r, ok := p.Options.Values().Get("proxy.router")
-	if ok {
-		p.Router = r.(router.Router)
-	}
-
 	// create default router and start it
 	if p.Router == nil {
 		p.Router = router.DefaultRouter
 	}
-
-	// routes cache
-	p.Routes = make(map[string]map[uint64]router.Route)
+	// set the links
+	if options.Links != nil {
+		// get client
+		p.Links = options.Links
+	}
 
 	go func() {
 		// continuously attempt to watch routes
@@ -530,16 +597,15 @@ func NewProxy(opts ...options.Option) proxy.Proxy {
 	}()
 
 	go func() {
-		t := time.NewTicker(time.Minute)
+		// TODO: speed up refreshing of metrics
+		// without this ticking effort e.g stream
+		t := time.NewTicker(time.Second * 10)
 		defer t.Stop()
 
 		// we must refresh route metrics since they do not trigger new events
-		for {
-			select {
-			case <-t.C:
-				// refresh route metrics
-				p.refreshMetrics()
-			}
+		for range t.C {
+			// refresh route metrics
+			p.refreshMetrics()
 		}
 	}()
 

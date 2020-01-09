@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"reflect"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -88,6 +89,11 @@ func newGRPCServer(opts ...server.Option) server.Server {
 
 type grpcRouter struct {
 	h func(context.Context, server.Request, interface{}) error
+	m func(context.Context, server.Message) error
+}
+
+func (r grpcRouter) ProcessMessage(ctx context.Context, msg server.Message) error {
+	return r.m(ctx, msg)
 }
 
 func (r grpcRouter) ServeRequest(ctx context.Context, req server.Request, rsp server.Response) error {
@@ -172,7 +178,7 @@ func (g *grpcServer) handler(srv interface{}, stream grpc.ServerStream) error {
 
 	fullMethod, ok := grpc.MethodFromServerStream(stream)
 	if !ok {
-		return grpc.Errorf(codes.Internal, "method does not exist in context")
+		return status.Errorf(codes.Internal, "method does not exist in context")
 	}
 
 	serviceName, methodName, err := mgrpc.ServiceMethod(fullMethod)
@@ -197,7 +203,11 @@ func (g *grpcServer) handler(srv interface{}, stream grpc.ServerStream) error {
 
 	// get content type
 	ct := defaultContentType
+
 	if ctype, ok := md["x-content-type"]; ok {
+		ct = ctype
+	}
+	if ctype, ok := md["content-type"]; ok {
 		ct = ctype
 	}
 
@@ -216,7 +226,9 @@ func (g *grpcServer) handler(srv interface{}, stream grpc.ServerStream) error {
 	// set the timeout if we have it
 	if len(to) > 0 {
 		if n, err := strconv.ParseUint(to, 10, 64); err == nil {
-			ctx, _ = context.WithTimeout(ctx, time.Duration(n))
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, time.Duration(n))
+			defer cancel()
 		}
 	}
 
@@ -240,6 +252,7 @@ func (g *grpcServer) handler(srv interface{}, stream grpc.ServerStream) error {
 			contentType: ct,
 			method:      fmt.Sprintf("%s.%s", serviceName, methodName),
 			codec:       codec,
+			stream:      true,
 		}
 
 		response := &rpcResponse{
@@ -257,7 +270,7 @@ func (g *grpcServer) handler(srv interface{}, stream grpc.ServerStream) error {
 			handler = g.opts.HdlrWrappers[i-1](handler)
 		}
 
-		r := grpcRouter{handler}
+		r := grpcRouter{h: handler}
 
 		// serve the actual request using the request router
 		if err := r.ServeRequest(ctx, request, response); err != nil {
@@ -337,20 +350,22 @@ func (g *grpcServer) processRequest(stream grpc.ServerStream, service *service, 
 		}
 
 		// define the handler func
-		fn := func(ctx context.Context, req server.Request, rsp interface{}) error {
+		fn := func(ctx context.Context, req server.Request, rsp interface{}) (err error) {
 			defer func() {
 				if r := recover(); r != nil {
-					log.Logf("handler %s panic recovered, err: %s", mtype.method.Name, r)
+					log.Log("panic recovered: ", r)
+					log.Logf(string(debug.Stack()))
+					err = errors.InternalServerError("go.micro.server", "panic recovered: %v", r)
 				}
 			}()
 			returnValues = function.Call([]reflect.Value{service.rcvr, mtype.prepareContext(ctx), reflect.ValueOf(argv.Interface()), reflect.ValueOf(rsp)})
 
 			// The return value for the method is an error.
-			if err := returnValues[0].Interface(); err != nil {
-				return err.(error)
+			if rerr := returnValues[0].Interface(); rerr != nil {
+				err = rerr.(error)
 			}
 
-			return nil
+			return err
 		}
 
 		// wrap the handler func
@@ -375,9 +390,11 @@ func (g *grpcServer) processRequest(stream grpc.ServerStream, service *service, 
 			}
 			return status.New(statusCode, statusDesc).Err()
 		}
+
 		if err := stream.SendMsg(replyv.Interface()); err != nil {
 			return err
 		}
+
 		return status.New(statusCode, statusDesc).Err()
 	}
 }
@@ -556,7 +573,7 @@ func (g *grpcServer) Register() error {
 	node.Metadata["registry"] = config.Registry.String()
 	node.Metadata["server"] = g.String()
 	node.Metadata["transport"] = g.String()
-	// node.Metadata["transport"] = config.Transport.String()
+	node.Metadata["protocol"] = "grpc"
 
 	g.RLock()
 	// Maps are ordered randomly, sort the keys for consistency
@@ -580,7 +597,7 @@ func (g *grpcServer) Register() error {
 		return subscriberList[i].topic > subscriberList[j].topic
 	})
 
-	var endpoints []*registry.Endpoint
+	endpoints := make([]*registry.Endpoint, 0, len(handlerList)+len(subscriberList))
 	for _, n := range handlerList {
 		endpoints = append(endpoints, g.handlers[n].Endpoints()...)
 	}
@@ -601,7 +618,7 @@ func (g *grpcServer) Register() error {
 	g.Unlock()
 
 	if !registered {
-		log.Logf("Registering node: %s", node.Id)
+		log.Logf("Registry [%s] Registering node: %s", config.Registry.String(), node.Id)
 	}
 
 	// create registry options

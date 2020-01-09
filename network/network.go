@@ -6,8 +6,6 @@ import (
 
 	"github.com/micro/go-micro/client"
 	"github.com/micro/go-micro/server"
-	"github.com/micro/go-micro/transport"
-	"github.com/micro/go-micro/tunnel"
 )
 
 var (
@@ -18,7 +16,9 @@ var (
 	// ResolveTime defines time interval to periodically resolve network nodes
 	ResolveTime = 1 * time.Minute
 	// AnnounceTime defines time interval to periodically announce node neighbours
-	AnnounceTime = 30 * time.Second
+	AnnounceTime = 1 * time.Second
+	// KeepAliveTime is the time in which we want to have sent a message to a peer
+	KeepAliveTime = 30 * time.Second
 	// PruneTime defines time interval to periodically check nodes that need to be pruned
 	// due to their not announcing their presence within this time interval
 	PruneTime = 90 * time.Second
@@ -54,14 +54,6 @@ type Network interface {
 	Client() client.Client
 	// Server is micro server
 	Server() server.Server
-}
-
-// message is network message
-type message struct {
-	// msg is transport message
-	msg *transport.Message
-	// session is tunnel session
-	session tunnel.Session
 }
 
 // NewNetwork returns a new network interface

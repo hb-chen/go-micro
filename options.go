@@ -31,6 +31,8 @@ type Options struct {
 	// Other options for implementations of the interface
 	// can be stored in a context
 	Context context.Context
+
+	Signal bool
 }
 
 func newOptions(opts ...Option) Options {
@@ -42,6 +44,7 @@ func newOptions(opts ...Option) Options {
 		Registry:  registry.DefaultRegistry,
 		Transport: transport.DefaultTransport,
 		Context:   context.Background(),
+		Signal:    true,
 	}
 
 	for _, o := range opts {
@@ -81,6 +84,15 @@ func Context(ctx context.Context) Option {
 	}
 }
 
+// HandleSignal toggles automatic installation of the signal handler that
+// traps TERM, INT, and QUIT.  Users of this feature to disable the signal
+// handler, should control liveness of the service through the context.
+func HandleSignal(b bool) Option {
+	return func(o *Options) {
+		o.Signal = b
+	}
+}
+
 func Server(s server.Server) Option {
 	return func(o *Options) {
 		o.Server = s
@@ -95,8 +107,6 @@ func Registry(r registry.Registry) Option {
 		// Update Client and Server
 		o.Client.Init(client.Registry(r))
 		o.Server.Init(server.Registry(r))
-		// Update Selector
-		o.Client.Options().Selector.Init(selector.Registry(r))
 		// Update Broker
 		o.Broker.Init(broker.Registry(r))
 	}

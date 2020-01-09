@@ -10,7 +10,7 @@ import (
 
 	"github.com/micro/go-micro/client"
 	"github.com/micro/go-micro/router"
-	pb "github.com/micro/go-micro/router/proto"
+	pb "github.com/micro/go-micro/router/service/proto"
 )
 
 type svc struct {
@@ -188,7 +188,7 @@ func (s *svc) Advertise() (<-chan *router.Advert, error) {
 
 // Process processes incoming adverts
 func (s *svc) Process(advert *router.Advert) error {
-	var events []*pb.Event
+	events := make([]*pb.Event, 0, len(advert.Events))
 	for _, event := range advert.Events {
 		route := &pb.Route{
 			Service: event.Route.Service,

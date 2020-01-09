@@ -28,6 +28,7 @@ import (
 	// registries
 	"github.com/micro/go-micro/registry"
 	"github.com/micro/go-micro/registry/etcd"
+	kreg "github.com/micro/go-micro/registry/kubernetes"
 	"github.com/micro/go-micro/registry/mdns"
 	rmem "github.com/micro/go-micro/registry/memory"
 	regSrv "github.com/micro/go-micro/registry/service"
@@ -44,6 +45,18 @@ import (
 	thttp "github.com/micro/go-micro/transport/http"
 	tmem "github.com/micro/go-micro/transport/memory"
 	"github.com/micro/go-micro/transport/quic"
+
+	// runtimes
+	"github.com/micro/go-micro/runtime"
+	"github.com/micro/go-micro/runtime/kubernetes"
+
+	// stores
+	"github.com/micro/go-micro/store"
+	cfStore "github.com/micro/go-micro/store/cloudflare"
+	ckStore "github.com/micro/go-micro/store/cockroach"
+	etcdStore "github.com/micro/go-micro/store/etcd"
+	memStore "github.com/micro/go-micro/store/memory"
+	svcStore "github.com/micro/go-micro/store/service"
 )
 
 type Cmd interface {
@@ -152,6 +165,11 @@ var (
 			Usage:  "Comma-separated list of broker addresses",
 		},
 		cli.StringFlag{
+			Name:   "profile",
+			Usage:  "Debug profiler for cpu and memory stats",
+			EnvVar: "MICRO_DEBUG_PROFILE",
+		},
+		cli.StringFlag{
 			Name:   "registry",
 			EnvVar: "MICRO_REGISTRY",
 			Usage:  "Registry for discovery. etcd, mdns",
@@ -162,9 +180,30 @@ var (
 			Usage:  "Comma-separated list of registry addresses",
 		},
 		cli.StringFlag{
+			Name:   "runtime",
+			Usage:  "Runtime for building and running services e.g local, kubernetes",
+			EnvVar: "MICRO_RUNTIME",
+			Value:  "local",
+		},
+		cli.StringFlag{
 			Name:   "selector",
 			EnvVar: "MICRO_SELECTOR",
 			Usage:  "Selector used to pick nodes for querying",
+		},
+		cli.StringFlag{
+			Name:   "store",
+			EnvVar: "MICRO_STORE",
+			Usage:  "Store used for key-value storage",
+		},
+		cli.StringFlag{
+			Name:   "store_address",
+			EnvVar: "MICRO_STORE_ADDRESS",
+			Usage:  "Comma-separated list of store addresses",
+		},
+		cli.StringFlag{
+			Name:   "store_namespace",
+			EnvVar: "MICRO_STORE_NAMESPACE",
+			Usage:  "Namespace for store data",
 		},
 		cli.StringFlag{
 			Name:   "transport",
@@ -179,25 +218,23 @@ var (
 	}
 
 	DefaultBrokers = map[string]func(...broker.Option) broker.Broker{
-		"go.micro.broker": brokerSrv.NewBroker,
-		"service":         brokerSrv.NewBroker,
-		"http":            http.NewBroker,
-		"memory":          memory.NewBroker,
-		"nats":            nats.NewBroker,
+		"service": brokerSrv.NewBroker,
+		"http":    http.NewBroker,
+		"memory":  memory.NewBroker,
+		"nats":    nats.NewBroker,
 	}
 
 	DefaultClients = map[string]func(...client.Option) client.Client{
-		"rpc":  client.NewClient,
 		"mucp": cmucp.NewClient,
 		"grpc": cgrpc.NewClient,
 	}
 
 	DefaultRegistries = map[string]func(...registry.Option) registry.Registry{
-		"go.micro.registry": regSrv.NewRegistry,
-		"service":           regSrv.NewRegistry,
-		"etcd":              etcd.NewRegistry,
-		"mdns":              mdns.NewRegistry,
-		"memory":            rmem.NewRegistry,
+		"service":    regSrv.NewRegistry,
+		"etcd":       etcd.NewRegistry,
+		"mdns":       mdns.NewRegistry,
+		"memory":     rmem.NewRegistry,
+		"kubernetes": kreg.NewRegistry,
 	}
 
 	DefaultSelectors = map[string]func(...selector.Option) selector.Selector{
@@ -209,7 +246,6 @@ var (
 	}
 
 	DefaultServers = map[string]func(...server.Option) server.Server{
-		"rpc":  server.NewServer,
 		"mucp": smucp.NewServer,
 		"grpc": sgrpc.NewServer,
 	}
@@ -221,13 +257,27 @@ var (
 		"quic":   quic.NewTransport,
 	}
 
+	DefaultRuntimes = map[string]func(...runtime.Option) runtime.Runtime{
+		"local":      runtime.NewRuntime,
+		"kubernetes": kubernetes.NewRuntime,
+	}
+
+	DefaultStores = map[string]func(...store.Option) store.Store{
+		"memory":     memStore.NewStore,
+		"cockroach":  ckStore.NewStore,
+		"etcd":       etcdStore.NewStore,
+		"cloudflare": cfStore.NewStore,
+		"service":    svcStore.NewStore,
+	}
+
 	// used for default selection as the fall back
-	defaultClient    = "rpc"
-	defaultServer    = "rpc"
+	defaultClient    = "grpc"
+	defaultServer    = "grpc"
 	defaultBroker    = "http"
 	defaultRegistry  = "mdns"
 	defaultSelector  = "registry"
 	defaultTransport = "http"
+	defaultRuntime   = "local"
 )
 
 func init() {
@@ -247,6 +297,8 @@ func newCmd(opts ...Option) Cmd {
 		Server:    &server.DefaultServer,
 		Selector:  &selector.DefaultSelector,
 		Transport: &transport.DefaultTransport,
+		Runtime:   &runtime.DefaultRuntime,
+		Store:     &store.DefaultStore,
 
 		Brokers:    DefaultBrokers,
 		Clients:    DefaultClients,
@@ -254,6 +306,8 @@ func newCmd(opts ...Option) Cmd {
 		Selectors:  DefaultSelectors,
 		Servers:    DefaultServers,
 		Transports: DefaultTransports,
+		Runtimes:   DefaultRuntimes,
+		Stores:     DefaultStores,
 	}
 
 	for _, o := range opts {
@@ -293,6 +347,26 @@ func (c *cmd) Before(ctx *cli.Context) error {
 	// If flags are set then use them otherwise do nothing
 	var serverOpts []server.Option
 	var clientOpts []client.Option
+
+	// Set the runtime
+	if name := ctx.String("store"); len(name) > 0 {
+		s, ok := c.opts.Stores[name]
+		if !ok {
+			return fmt.Errorf("Unsupported store: %s", name)
+		}
+
+		*c.opts.Store = s()
+	}
+
+	// Set the runtime
+	if name := ctx.String("runtime"); len(name) > 0 {
+		r, ok := c.opts.Runtimes[name]
+		if !ok {
+			return fmt.Errorf("Unsupported runtime: %s", name)
+		}
+
+		*c.opts.Runtime = r()
+	}
 
 	// Set the client
 	if name := ctx.String("client"); len(name) > 0 {
@@ -400,6 +474,18 @@ func (c *cmd) Before(ctx *cli.Context) error {
 	if len(ctx.String("transport_address")) > 0 {
 		if err := (*c.opts.Transport).Init(transport.Addrs(strings.Split(ctx.String("transport_address"), ",")...)); err != nil {
 			log.Fatalf("Error configuring transport: %v", err)
+		}
+	}
+
+	if len(ctx.String("store_address")) > 0 {
+		if err := (*c.opts.Store).Init(store.Nodes(strings.Split(ctx.String("store_address"), ",")...)); err != nil {
+			log.Fatalf("Error configuring store: %v", err)
+		}
+	}
+
+	if len(ctx.String("store_namespace")) > 0 {
+		if err := (*c.opts.Store).Init(store.Namespace(ctx.String("store_address"))); err != nil {
+			log.Fatalf("Error configuring store: %v", err)
 		}
 	}
 

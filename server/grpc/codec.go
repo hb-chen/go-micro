@@ -64,6 +64,9 @@ func (w wrapCodec) Unmarshal(data []byte, v interface{}) error {
 		b.Data = data
 		return nil
 	}
+	if v == nil {
+		return nil
+	}
 	return w.Codec.Unmarshal(data, v)
 }
 
@@ -90,10 +93,12 @@ func (jsonCodec) Marshal(v interface{}) ([]byte, error) {
 }
 
 func (jsonCodec) Unmarshal(data []byte, v interface{}) error {
+	if len(data) == 0 {
+		return nil
+	}
 	if pb, ok := v.(proto.Message); ok {
 		return jsonpb.Unmarshal(b.NewReader(data), pb)
 	}
-
 	return json.Unmarshal(data, v)
 }
 
@@ -169,7 +174,7 @@ func (g *grpcCodec) Write(m *codec.Message, v interface{}) error {
 		m.Body = b
 	}
 	// write the body using the framing codec
-	return g.s.SendMsg(&bytes.Frame{m.Body})
+	return g.s.SendMsg(&bytes.Frame{Data: m.Body})
 }
 
 func (g *grpcCodec) Close() error {
@@ -177,5 +182,5 @@ func (g *grpcCodec) Close() error {
 }
 
 func (g *grpcCodec) String() string {
-	return g.c.Name()
+	return "grpc"
 }

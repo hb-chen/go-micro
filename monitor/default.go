@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/micro/go-micro/client"
-	pb "github.com/micro/go-micro/debug/proto"
+	pb "github.com/micro/go-micro/debug/service/proto"
 	"github.com/micro/go-micro/registry"
 	"github.com/micro/go-micro/registry/cache"
 )
@@ -78,13 +78,6 @@ func (m *monitor) check(service string) (*Status, error) {
 				client.WithRetries(3),
 			)
 			if err != nil {
-				// reap the dead node
-				m.registry.Deregister(&registry.Service{
-					Name:    service.Name,
-					Version: service.Version,
-					Nodes:   []*registry.Node{node},
-				})
-
 				// save the error
 				gerr = err
 				continue
@@ -314,8 +307,6 @@ func (m *monitor) Stop() error {
 		m.running = false
 		return nil
 	}
-
-	return nil
 }
 
 func newMonitor(opts ...Option) Monitor {

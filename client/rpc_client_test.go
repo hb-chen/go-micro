@@ -12,10 +12,7 @@ import (
 )
 
 func newTestRegistry() registry.Registry {
-	r := memory.NewRegistry()
-	reg := r.(*memory.Registry)
-	reg.Services = testData
-	return reg
+	return memory.NewRegistry(memory.Services(testData))
 }
 
 func TestCallAddress(t *testing.T) {
@@ -146,6 +143,9 @@ func TestCallWrapper(t *testing.T) {
 			{
 				Id:      id,
 				Address: address,
+				Metadata: map[string]string{
+					"protocol": "mucp",
+				},
 			},
 		},
 	})
