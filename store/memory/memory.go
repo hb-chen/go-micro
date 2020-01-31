@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/micro/go-micro/store"
+	"github.com/micro/go-micro/v2/store"
 )
 
 type memoryStore struct {
@@ -128,6 +128,10 @@ func (m *memoryStore) Delete(key string) error {
 	delete(m.values, key)
 
 	return nil
+}
+
+func (m *memoryStore) String() string {
+	return "memory"
 }
 
 // NewStore returns a new store.Store

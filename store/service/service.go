@@ -6,10 +6,10 @@ import (
 	"io"
 	"time"
 
-	"github.com/micro/go-micro/client"
-	"github.com/micro/go-micro/metadata"
-	"github.com/micro/go-micro/store"
-	pb "github.com/micro/go-micro/store/service/proto"
+	"github.com/micro/go-micro/v2/client"
+	"github.com/micro/go-micro/v2/metadata"
+	"github.com/micro/go-micro/v2/store"
+	pb "github.com/micro/go-micro/v2/store/service/proto"
 )
 
 type serviceStore struct {
@@ -135,6 +135,10 @@ func (s *serviceStore) Delete(key string) error {
 		Key: key,
 	}, client.WithAddress(s.Nodes...))
 	return err
+}
+
+func (s *serviceStore) String() string {
+	return "service"
 }
 
 // NewStore returns a new store service implementation

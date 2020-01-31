@@ -4,13 +4,14 @@ package cockroach
 import (
 	"database/sql"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 	"unicode"
 
 	"github.com/lib/pq"
-	"github.com/micro/go-micro/store"
-	"github.com/micro/go-micro/util/log"
+	"github.com/micro/go-micro/v2/store"
+	"github.com/micro/go-micro/v2/util/log"
 	"github.com/pkg/errors"
 )
 
@@ -212,8 +213,13 @@ func (s *sqlStore) configure() error {
 	}
 
 	source := nodes[0]
-	if !strings.Contains(source, " ") {
-		source = fmt.Sprintf("host=%s", source)
+	// check if it is a standard connection string eg: host=%s port=%d user=%s password=%s dbname=%s sslmode=disable
+	// if err is nil which means it would be a URL like postgre://xxxx?yy=zz
+	_, err := url.Parse(source)
+	if err != nil {
+		if !strings.Contains(source, " ") {
+			source = fmt.Sprintf("host=%s", source)
+		}
 	}
 
 	// create source from first node
@@ -239,6 +245,10 @@ func (s *sqlStore) configure() error {
 	return s.initDB()
 }
 
+func (s *sqlStore) String() string {
+	return "cockroach"
+}
+
 // New returns a new micro Store backed by sql
 func NewStore(opts ...store.Option) store.Store {
 	var options store.Options
@@ -248,6 +258,8 @@ func NewStore(opts ...store.Option) store.Store {
 
 	// new store
 	s := new(sqlStore)
+	// set the options
+	s.options = options
 
 	// configure the store
 	if err := s.configure(); err != nil {

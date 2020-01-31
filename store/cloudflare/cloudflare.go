@@ -17,7 +17,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/micro/go-micro/store"
+	"github.com/micro/go-micro/v2/store"
 	"github.com/pkg/errors"
 )
 
@@ -330,6 +330,10 @@ func (w *workersKV) request(ctx context.Context, method, path string, body inter
 	}
 
 	return respBody, resp.Header, resp.StatusCode, nil
+}
+
+func (w *workersKV) String() string {
+	return "cloudflare"
 }
 
 // New returns a cloudflare Store implementation.
