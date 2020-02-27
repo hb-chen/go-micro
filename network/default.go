@@ -15,6 +15,7 @@ import (
 	"github.com/micro/go-micro/v2/client"
 	cmucp "github.com/micro/go-micro/v2/client/mucp"
 	rtr "github.com/micro/go-micro/v2/client/selector/router"
+	log "github.com/micro/go-micro/v2/logger"
 	"github.com/micro/go-micro/v2/network/resolver/dns"
 	pbNet "github.com/micro/go-micro/v2/network/service/proto"
 	"github.com/micro/go-micro/v2/proxy"
@@ -27,7 +28,6 @@ import (
 	bun "github.com/micro/go-micro/v2/tunnel/broker"
 	tun "github.com/micro/go-micro/v2/tunnel/transport"
 	"github.com/micro/go-micro/v2/util/backoff"
-	"github.com/micro/go-micro/v2/util/log"
 	pbUtil "github.com/micro/go-micro/v2/util/proto"
 )
 
@@ -225,9 +225,6 @@ func (n *network) acceptNetConn(l tunnel.Listener, recv chan *message) {
 			sleep := backoff.Do(i)
 			log.Debugf("Network tunnel [%s] accept error: %v, backing off for %v", ControlChannel, err, sleep)
 			time.Sleep(sleep)
-			if i > 5 {
-				i = 0
-			}
 			i++
 			continue
 		}
@@ -255,10 +252,6 @@ func (n *network) acceptCtrlConn(l tunnel.Listener, recv chan *message) {
 			sleep := backoff.Do(i)
 			log.Debugf("Network tunnel [%s] accept error: %v, backing off for %v", ControlChannel, err, sleep)
 			time.Sleep(sleep)
-			if i > 5 {
-				// reset the counter
-				i = 0
-			}
 			i++
 			continue
 		}
@@ -1572,11 +1565,6 @@ func (n *network) connect() {
 		case <-time.After(time.Second + backoff.Do(attempts)):
 			// we have to try again
 			attempts++
-
-			// reset attempts 5 == ~2mins
-			if attempts > 5 {
-				attempts = 0
-			}
 		}
 	}
 }

@@ -13,9 +13,9 @@ import (
 
 	"github.com/micro/go-micro/v2/broker"
 	"github.com/micro/go-micro/v2/codec/json"
+	log "github.com/micro/go-micro/v2/logger"
 	"github.com/micro/go-micro/v2/registry"
 	"github.com/micro/go-micro/v2/util/addr"
-	"github.com/micro/go-micro/v2/util/log"
 	"github.com/nats-io/nats-server/v2/server"
 	nats "github.com/nats-io/nats.go"
 )
@@ -164,7 +164,7 @@ func (n *natsBroker) serve(exit chan bool) error {
 			for _, node := range service.Nodes {
 				u, err := url.Parse("nats://" + node.Address)
 				if err != nil {
-					log.Log(err)
+					log.Error(err)
 					continue
 				}
 				// append to the cluster routes
@@ -318,7 +318,7 @@ func (n *natsBroker) Disconnect() error {
 	// drain the connection if specified
 	if n.drain {
 		n.conn.Drain()
-		return <-n.closeCh
+		n.closeCh <- nil
 	}
 
 	// close the client connection
@@ -440,6 +440,7 @@ func (n *natsBroker) setOption(opts ...broker.Option) {
 		n.closeCh = make(chan error)
 		n.nopts.ClosedCB = n.onClose
 		n.nopts.AsyncErrorCB = n.onAsyncError
+		n.nopts.DisconnectedErrCB = n.onDisconnectedError
 	}
 }
 
@@ -453,6 +454,10 @@ func (n *natsBroker) onAsyncError(conn *nats.Conn, sub *nats.Subscription, err e
 	if err == nats.ErrDrainTimeout {
 		n.closeCh <- err
 	}
+}
+
+func (n *natsBroker) onDisconnectedError(conn *nats.Conn, err error) {
+	n.closeCh <- err
 }
 
 func NewBroker(opts ...broker.Option) broker.Broker {

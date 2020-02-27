@@ -3,22 +3,17 @@ package kubernetes
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
+	log "github.com/micro/go-micro/v2/logger"
 	"github.com/micro/go-micro/v2/runtime"
 	"github.com/micro/go-micro/v2/util/kubernetes/client"
-	"github.com/micro/go-micro/v2/util/log"
 )
 
 // action to take on runtime service
 type action int
-
-const (
-	start action = iota
-	update
-	stop
-)
 
 type kubernetes struct {
 	sync.RWMutex
@@ -251,6 +246,11 @@ func (k *kubernetes) Init(opts ...runtime.Option) error {
 		o(&k.options)
 	}
 
+	// trim the source prefix if its a git url
+	if strings.HasPrefix(k.options.Source, "github.com") {
+		k.options.Source = strings.TrimPrefix(k.options.Source, "github.com/")
+	}
+
 	return nil
 }
 
@@ -271,7 +271,9 @@ func (k *kubernetes) Create(s *runtime.Service, opts ...runtime.CreateOption) er
 		options.Type = k.options.Type
 	}
 
-	// create new kubernetes micro service
+	// determine the full source for this service
+	options.Source = k.sourceForService(s.Name)
+
 	service := newService(s, options)
 
 	// start the service
@@ -327,7 +329,8 @@ func (k *kubernetes) List() ([]*runtime.Service, error) {
 func (k *kubernetes) Update(s *runtime.Service) error {
 	// create new kubernetes micro service
 	service := newService(s, runtime.CreateOptions{
-		Type: k.options.Type,
+		Type:   k.options.Type,
+		Source: k.sourceForService(s.Name),
 	})
 
 	// update build time annotation
@@ -429,4 +432,16 @@ func NewRuntime(opts ...runtime.Option) runtime.Runtime {
 		closed:  make(chan bool),
 		client:  client,
 	}
+}
+
+// sourceForService determines the nested package name for github
+// e.g src: docker.pkg.github.com/micro/services an srv: users/api
+// would become docker.pkg.github.com/micro/services/users-api
+func (k *kubernetes) sourceForService(name string) string {
+	if !strings.HasPrefix(k.options.Source, "docker.pkg.github.com") {
+		return k.options.Source
+	}
+
+	formattedName := strings.ReplaceAll(name, "/", "-")
+	return fmt.Sprintf("%v/%v", k.options.Source, formattedName)
 }

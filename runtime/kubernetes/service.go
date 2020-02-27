@@ -5,10 +5,10 @@ import (
 	"strings"
 	"time"
 
+	log "github.com/micro/go-micro/v2/logger"
 	"github.com/micro/go-micro/v2/runtime"
 	"github.com/micro/go-micro/v2/util/kubernetes/api"
 	"github.com/micro/go-micro/v2/util/kubernetes/client"
-	"github.com/micro/go-micro/v2/util/log"
 )
 
 type service struct {
@@ -33,6 +33,14 @@ func newService(s *runtime.Service, c runtime.CreateOptions) *service {
 
 	kservice := client.NewService(name, version, c.Type)
 	kdeploy := client.NewDeployment(name, version, c.Type)
+
+	if len(c.Source) > 0 {
+		for i := range kdeploy.Spec.Template.PodSpec.Containers {
+			kdeploy.Spec.Template.PodSpec.Containers[i].Image = c.Source
+			kdeploy.Spec.Template.PodSpec.Containers[i].Command = []string{}
+			kdeploy.Spec.Template.PodSpec.Containers[i].Args = []string{name}
+		}
+	}
 
 	// attach our values to the deployment; name, version, source
 	kdeploy.Metadata.Annotations["name"] = s.Name
@@ -62,11 +70,8 @@ func newService(s *runtime.Service, c runtime.CreateOptions) *service {
 	}
 
 	// specify the command to exec
-	if len(c.Command) > 0 {
+	if strings.HasPrefix(c.Source, "github.com") && len(c.Command) > 0 {
 		kdeploy.Spec.Template.PodSpec.Containers[0].Command = c.Command
-	} else if len(s.Source) > 0 {
-		// default command for our k8s service should be source
-		kdeploy.Spec.Template.PodSpec.Containers[0].Command = []string{"go", "run", s.Source}
 	}
 
 	return &service{

@@ -8,17 +8,16 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/micro/go-micro/v2/auth"
 	"github.com/micro/go-micro/v2/client"
 	"github.com/micro/go-micro/v2/config/cmd"
-	"github.com/micro/go-micro/v2/debug/profile"
-	"github.com/micro/go-micro/v2/debug/profile/http"
-	"github.com/micro/go-micro/v2/debug/profile/pprof"
 	"github.com/micro/go-micro/v2/debug/service/handler"
 	"github.com/micro/go-micro/v2/debug/stats"
 	"github.com/micro/go-micro/v2/debug/trace"
+	log "github.com/micro/go-micro/v2/logger"
 	"github.com/micro/go-micro/v2/plugin"
 	"github.com/micro/go-micro/v2/server"
-	"github.com/micro/go-micro/v2/util/log"
+	"github.com/micro/go-micro/v2/util/config"
 	"github.com/micro/go-micro/v2/util/wrapper"
 )
 
@@ -29,24 +28,30 @@ type service struct {
 }
 
 func newService(opts ...Option) Service {
+	service := new(service)
 	options := newOptions(opts...)
 
 	// service name
 	serviceName := options.Server.Options().Name
 
+	// TODO: better accessors
+	authFn := func() auth.Auth { return service.opts.Auth }
+
 	// wrap client to inject From-Service header on any calls
-	options.Client = wrapper.FromService(serviceName, options.Client)
+	options.Client = wrapper.FromService(serviceName, options.Client, authFn)
 	options.Client = wrapper.TraceCall(serviceName, trace.DefaultTracer, options.Client)
 
 	// wrap the server to provide handler stats
 	options.Server.Init(
 		server.WrapHandler(wrapper.HandlerStats(stats.DefaultStats)),
 		server.WrapHandler(wrapper.TraceHandler(trace.DefaultTracer)),
+		server.WrapHandler(wrapper.AuthHandler(authFn)),
 	)
 
-	return &service{
-		opts: options,
-	}
+	// set opts
+	service.opts = options
+
+	return service
 }
 
 func (s *service) Name() string {
@@ -87,13 +92,25 @@ func (s *service) Init(opts ...Option) {
 		}
 
 		// Initialise the command flags, overriding new service
-		_ = s.opts.Cmd.Init(
+		if err := s.opts.Cmd.Init(
+			cmd.Auth(&s.opts.Auth),
 			cmd.Broker(&s.opts.Broker),
 			cmd.Registry(&s.opts.Registry),
 			cmd.Transport(&s.opts.Transport),
 			cmd.Client(&s.opts.Client),
 			cmd.Server(&s.opts.Server),
-		)
+			cmd.Profile(&s.opts.Profile),
+		); err != nil {
+			log.Fatal(err)
+		}
+
+		// TODO: replace Cmd.Init with config.Load
+		// Right now we're just going to load a token
+		// May need to re-read value on change
+		// TODO: should be scoped to micro/auth/token
+		if tk, _ := config.Get("token"); len(tk) > 0 {
+			s.opts.Auth.Init(auth.Token(tk))
+		}
 	})
 }
 
@@ -165,34 +182,19 @@ func (s *service) Run() error {
 	)
 
 	// start the profiler
-	// TODO: set as an option to the service, don't just use pprof
-	if prof := os.Getenv("MICRO_DEBUG_PROFILE"); len(prof) > 0 {
-		var profiler profile.Profile
-
+	if s.opts.Profile != nil {
 		// to view mutex contention
 		runtime.SetMutexProfileFraction(5)
 		// to view blocking profile
 		runtime.SetBlockProfileRate(1)
 
-		switch prof {
-		case "http":
-			profiler = http.NewProfile()
-		default:
-			service := s.opts.Server.Options().Name
-			version := s.opts.Server.Options().Version
-			id := s.opts.Server.Options().Id
-			profiler = pprof.NewProfile(
-				profile.Name(service + "." + version + "." + id),
-			)
-		}
-
-		if err := profiler.Start(); err != nil {
+		if err := s.opts.Profile.Start(); err != nil {
 			return err
 		}
-		defer profiler.Stop()
+		defer s.opts.Profile.Stop()
 	}
 
-	log.Logf("Starting [service] %s", s.Name())
+	log.Infof("Starting [service] %s", s.Name())
 
 	if err := s.Start(); err != nil {
 		return err

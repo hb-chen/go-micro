@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	log "github.com/micro/go-micro/v2/logger"
 	"github.com/micro/go-micro/v2/transport"
-	"github.com/micro/go-micro/v2/util/log"
 )
 
 type link struct {
@@ -105,32 +105,6 @@ func newLink(s transport.Socket) *link {
 	go l.manage()
 
 	return l
-}
-
-func (l *link) connect(addr string) error {
-	c, err := l.transport.Dial(addr)
-	if err != nil {
-		return err
-	}
-
-	l.Lock()
-	l.Socket = c
-	l.Unlock()
-
-	return nil
-}
-
-func (l *link) accept(sock transport.Socket) error {
-	l.Lock()
-	l.Socket = sock
-	l.Unlock()
-	return nil
-}
-
-func (l *link) setLoopback(v bool) {
-	l.Lock()
-	l.loopback = v
-	l.Unlock()
 }
 
 // setRate sets the bits per second rate as a float64

@@ -7,16 +7,20 @@ import (
 	"strings"
 	"time"
 
+	"github.com/micro/go-micro/v2/auth"
 	"github.com/micro/go-micro/v2/broker"
 	"github.com/micro/go-micro/v2/client"
 	"github.com/micro/go-micro/v2/client/selector"
+	"github.com/micro/go-micro/v2/debug/profile"
+	"github.com/micro/go-micro/v2/debug/profile/http"
+	"github.com/micro/go-micro/v2/debug/profile/pprof"
 	"github.com/micro/go-micro/v2/debug/trace"
+	log "github.com/micro/go-micro/v2/logger"
 	"github.com/micro/go-micro/v2/registry"
 	"github.com/micro/go-micro/v2/runtime"
 	"github.com/micro/go-micro/v2/server"
 	"github.com/micro/go-micro/v2/store"
 	"github.com/micro/go-micro/v2/transport"
-	"github.com/micro/go-micro/v2/util/log"
 
 	// clients
 	cgrpc "github.com/micro/go-micro/v2/client/grpc"
@@ -24,6 +28,7 @@ import (
 
 	// servers
 	"github.com/micro/cli/v2"
+
 	sgrpc "github.com/micro/go-micro/v2/server/grpc"
 	smucp "github.com/micro/go-micro/v2/server/mucp"
 
@@ -38,6 +43,11 @@ import (
 	"github.com/micro/go-micro/v2/registry/mdns"
 	rmem "github.com/micro/go-micro/v2/registry/memory"
 	regSrv "github.com/micro/go-micro/v2/registry/service"
+
+	// runtimes
+	kRuntime "github.com/micro/go-micro/v2/runtime/kubernetes"
+	lRuntime "github.com/micro/go-micro/v2/runtime/local"
+	srvRuntime "github.com/micro/go-micro/v2/runtime/service"
 
 	// selectors
 	"github.com/micro/go-micro/v2/client/selector/dns"
@@ -55,6 +65,11 @@ import (
 	// tracers
 	// jTracer "github.com/micro/go-micro/v2/debug/trace/jaeger"
 	memTracer "github.com/micro/go-micro/v2/debug/trace/memory"
+
+	// auth
+	jwtAuth "github.com/micro/go-micro/v2/auth/jwt"
+	sAuth "github.com/micro/go-micro/v2/auth/service"
+	storeAuth "github.com/micro/go-micro/v2/auth/store"
 )
 
 type Cmd interface {
@@ -184,6 +199,12 @@ var (
 			Value:   "local",
 		},
 		&cli.StringFlag{
+			Name:    "runtime_source",
+			Usage:   "Runtime source for building and running services e.g github.com/micro/service",
+			EnvVars: []string{"MICRO_RUNTIME_SOURCE"},
+			Value:   "github.com/micro/services",
+		},
+		&cli.StringFlag{
 			Name:    "selector",
 			EnvVars: []string{"MICRO_SELECTOR"},
 			Usage:   "Selector used to pick nodes for querying",
@@ -223,6 +244,31 @@ var (
 			EnvVars: []string{"MICRO_TRACER_ADDRESS"},
 			Usage:   "Comma-separated list of tracer addresses",
 		},
+		&cli.StringFlag{
+			Name:    "auth",
+			EnvVars: []string{"MICRO_AUTH"},
+			Usage:   "Auth for role based access control, e.g. service",
+		},
+		&cli.StringFlag{
+			Name:    "auth_token",
+			EnvVars: []string{"MICRO_AUTH_TOKEN"},
+			Usage:   "Auth token used for client authentication",
+		},
+		&cli.StringFlag{
+			Name:    "auth_public_key",
+			EnvVars: []string{"MICRO_AUTH_PUBLIC_KEY"},
+			Usage:   "Public key for JWT auth (base64 encoded PEM)",
+		},
+		&cli.StringFlag{
+			Name:    "auth_private_key",
+			EnvVars: []string{"MICRO_AUTH_PRIVATE_KEY"},
+			Usage:   "Private key for JWT auth (base64 encoded PEM)",
+		},
+		&cli.StringSliceFlag{
+			Name:    "auth_exclude",
+			EnvVars: []string{"MICRO_AUTH_EXCLUDE"},
+			Usage:   "Comma-separated list of endpoints excluded from authentication, e.g. Users.ListUsers",
+		},
 	}
 
 	DefaultBrokers = map[string]func(...broker.Option) broker.Broker{
@@ -261,7 +307,9 @@ var (
 	}
 
 	DefaultRuntimes = map[string]func(...runtime.Option) runtime.Runtime{
-		"local": runtime.NewRuntime,
+		"local":      lRuntime.NewRuntime,
+		"service":    srvRuntime.NewRuntime,
+		"kubernetes": kRuntime.NewRuntime,
 	}
 
 	DefaultStores = map[string]func(...store.Option) store.Store{
@@ -274,15 +322,16 @@ var (
 		// "jaeger": jTracer.NewTracer,
 	}
 
-	// used for default selection as the fall back
-	defaultClient    = "grpc"
-	defaultServer    = "grpc"
-	defaultBroker    = "eats"
-	defaultRegistry  = "mdns"
-	defaultSelector  = "registry"
-	defaultTransport = "http"
-	defaultRuntime   = "local"
-	defaultStore     = "memory"
+	DefaultAuths = map[string]func(...auth.Option) auth.Auth{
+		"service": sAuth.NewAuth,
+		"store":   storeAuth.NewAuth,
+		"jwt":     jwtAuth.NewAuth,
+	}
+
+	DefaultProfiles = map[string]func(...profile.Option) profile.Profile{
+		"http":  http.NewProfile,
+		"pprof": pprof.NewProfile,
+	}
 )
 
 func init() {
@@ -291,6 +340,7 @@ func init() {
 
 func newCmd(opts ...Option) Cmd {
 	options := Options{
+		Auth:      &auth.DefaultAuth,
 		Broker:    &broker.DefaultBroker,
 		Client:    &client.DefaultClient,
 		Registry:  &registry.DefaultRegistry,
@@ -300,6 +350,7 @@ func newCmd(opts ...Option) Cmd {
 		Runtime:   &runtime.DefaultRuntime,
 		Store:     &store.DefaultStore,
 		Tracer:    &trace.DefaultTracer,
+		Profile:   &profile.DefaultProfile,
 
 		Brokers:    DefaultBrokers,
 		Clients:    DefaultClients,
@@ -310,6 +361,8 @@ func newCmd(opts ...Option) Cmd {
 		Runtimes:   DefaultRuntimes,
 		Stores:     DefaultStores,
 		Tracers:    DefaultTracers,
+		Auths:      DefaultAuths,
+		Profiles:   DefaultProfiles,
 	}
 
 	for _, o := range opts {
@@ -349,6 +402,7 @@ func (c *cmd) Options() Options {
 
 func (c *cmd) Before(ctx *cli.Context) error {
 	// If flags are set then use them otherwise do nothing
+	var authOpts []auth.Option
 	var serverOpts []server.Option
 	var clientOpts []client.Option
 
@@ -380,6 +434,26 @@ func (c *cmd) Before(ctx *cli.Context) error {
 		}
 
 		*c.opts.Tracer = r()
+	}
+
+	// Set the auth
+	if name := ctx.String("auth"); len(name) > 0 {
+		a, ok := c.opts.Auths[name]
+		if !ok {
+			return fmt.Errorf("Unsupported auth: %s", name)
+		}
+
+		*c.opts.Auth = a()
+	}
+
+	// Set the profile
+	if name := ctx.String("profile"); len(name) > 0 {
+		p, ok := c.opts.Profiles[name]
+		if !ok {
+			return fmt.Errorf("Unsupported profile: %s", name)
+		}
+
+		*c.opts.Profile = p()
 	}
 
 	// Set the client
@@ -529,6 +603,34 @@ func (c *cmd) Before(ctx *cli.Context) error {
 
 	if val := time.Duration(ctx.Int("register_interval")); val >= 0 {
 		serverOpts = append(serverOpts, server.RegisterInterval(val*time.Second))
+	}
+
+	if len(ctx.String("runtime_source")) > 0 {
+		if err := (*c.opts.Runtime).Init(runtime.WithSource(ctx.String("runtime_source"))); err != nil {
+			log.Fatalf("Error configuring runtime: %v", err)
+		}
+	}
+
+	if len(ctx.String("auth_token")) > 0 {
+		authOpts = append(authOpts, auth.Token(ctx.String("auth_token")))
+	}
+
+	if len(ctx.String("auth_public_key")) > 0 {
+		authOpts = append(authOpts, auth.PublicKey(ctx.String("auth_public_key")))
+	}
+
+	if len(ctx.String("auth_private_key")) > 0 {
+		authOpts = append(authOpts, auth.PrivateKey(ctx.String("auth_private_key")))
+	}
+
+	if len(ctx.StringSlice("auth_exclude")) > 0 {
+		authOpts = append(authOpts, auth.Exclude(ctx.StringSlice("auth_exclude")...))
+	}
+
+	if len(authOpts) > 0 {
+		if err := (*c.opts.Auth).Init(authOpts...); err != nil {
+			log.Fatalf("Error configuring auth: %v", err)
+		}
 	}
 
 	// client opts

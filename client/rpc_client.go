@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -22,7 +21,7 @@ import (
 )
 
 type rpcClient struct {
-	once sync.Once
+	once atomic.Value
 	opts Options
 	pool pool.Pool
 	seq  uint64
@@ -38,11 +37,11 @@ func newRpcClient(opt ...Option) Client {
 	)
 
 	rc := &rpcClient{
-		once: sync.Once{},
 		opts: opts,
 		pool: p,
 		seq:  0,
 	}
+	rc.once.Store(false)
 
 	c := Client(rc)
 
@@ -74,6 +73,11 @@ func (r *rpcClient) call(ctx context.Context, node *registry.Node, req Request, 
 	md, ok := metadata.FromContext(ctx)
 	if ok {
 		for k, v := range md {
+			// don't copy Micro-Topic header, that used for pub/sub
+			// this fix case then client uses the same context that received in subscriber
+			if k == "Micro-Topic" {
+				continue
+			}
 			msg.Header[k] = v
 		}
 	}
@@ -337,6 +341,10 @@ func (r *rpcClient) next(request Request, opts CallOptions) (selector.Next, erro
 
 	// get proxy
 	if prx := os.Getenv("MICRO_PROXY"); len(prx) > 0 {
+		// default name
+		if prx == "service" {
+			prx = "go.micro.proxy"
+		}
 		service = prx
 	}
 
@@ -601,11 +609,6 @@ func (r *rpcClient) Publish(ctx context.Context, msg Message, opts ...PublishOpt
 	// set the topic
 	topic := msg.Topic()
 
-	// get proxy
-	if prx := os.Getenv("MICRO_PROXY"); len(prx) > 0 {
-		options.Exchange = prx
-	}
-
 	// get the exchange
 	if len(options.Exchange) > 0 {
 		topic = options.Exchange
@@ -641,9 +644,12 @@ func (r *rpcClient) Publish(ctx context.Context, msg Message, opts ...PublishOpt
 		body = b.Bytes()
 	}
 
-	r.once.Do(func() {
-		r.opts.Broker.Connect()
-	})
+	if !r.once.Load().(bool) {
+		if err = r.opts.Broker.Connect(); err != nil {
+			return errors.InternalServerError("go.micro.client", err.Error())
+		}
+		r.once.Store(true)
+	}
 
 	return r.opts.Broker.Publish(topic, &broker.Message{
 		Header: md,

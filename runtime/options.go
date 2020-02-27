@@ -12,6 +12,15 @@ type Options struct {
 	Scheduler Scheduler
 	// Service type to manage
 	Type string
+	// Source of the services repository
+	Source string
+}
+
+// WithSource sets the base image / repository
+func WithSource(src string) Option {
+	return func(o *Options) {
+		o.Source = src
+	}
 }
 
 // WithScheduler specifies a scheduler for updates
@@ -42,6 +51,10 @@ type CreateOptions struct {
 	Output io.Writer
 	// Type of service to create
 	Type string
+	// Retries before failing deploy
+	Retries int
+	// Source of the service
+	Source string
 }
 
 // ReadOptions queries runtime services
@@ -61,11 +74,25 @@ func CreateType(t string) CreateOption {
 	}
 }
 
+// CreateSource sets the source of service to create
+func CreateSource(t string) CreateOption {
+	return func(o *CreateOptions) {
+		o.Source = t
+	}
+}
+
 // WithCommand specifies the command to execute
 func WithCommand(args ...string) CreateOption {
 	return func(o *CreateOptions) {
 		// set command
 		o.Command = args
+	}
+}
+
+// WithRetries sets the max retries attemps
+func WithRetries(retries int) CreateOption {
+	return func(o *CreateOptions) {
+		o.Retries = retries
 	}
 }
 
@@ -90,7 +117,7 @@ func ReadService(service string) ReadOption {
 	}
 }
 
-// WithVersion confifgures service version
+// ReadVersion confifgures service version
 func ReadVersion(version string) ReadOption {
 	return func(o *ReadOptions) {
 		o.Version = version

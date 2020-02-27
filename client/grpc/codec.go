@@ -69,15 +69,21 @@ func (w wrapCodec) Unmarshal(data []byte, v interface{}) error {
 }
 
 func (protoCodec) Marshal(v interface{}) ([]byte, error) {
-	b, ok := v.(*bytes.Frame)
-	if ok {
-		return b.Data, nil
+	switch m := v.(type) {
+	case *bytes.Frame:
+		return m.Data, nil
+	case proto.Message:
+		return proto.Marshal(m)
 	}
-	return proto.Marshal(v.(proto.Message))
+	return nil, fmt.Errorf("failed to marshal: %v is not type of *bytes.Frame or proto.Message", v)
 }
 
 func (protoCodec) Unmarshal(data []byte, v interface{}) error {
-	return proto.Unmarshal(data, v.(proto.Message))
+	m, ok := v.(proto.Message)
+	if !ok {
+		return fmt.Errorf("failed to unmarshal: %v is not type of proto.Message", v)
+	}
+	return proto.Unmarshal(data, m)
 }
 
 func (protoCodec) Name() string {
@@ -149,7 +155,7 @@ func (g *grpcCodec) ReadHeader(m *codec.Message, mt codec.MessageType) error {
 		m = new(codec.Message)
 	}
 	if m.Header == nil {
-		m.Header = make(map[string]string)
+		m.Header = make(map[string]string, len(md))
 	}
 	for k, v := range md {
 		m.Header[k] = strings.Join(v, ",")

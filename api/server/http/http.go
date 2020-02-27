@@ -10,7 +10,7 @@ import (
 
 	"github.com/gorilla/handlers"
 	"github.com/micro/go-micro/v2/api/server"
-	"github.com/micro/go-micro/v2/util/log"
+	log "github.com/micro/go-micro/v2/logger"
 )
 
 type httpServer struct {
@@ -54,7 +54,7 @@ func (s *httpServer) Start() error {
 
 	if s.opts.EnableACME && s.opts.ACMEProvider != nil {
 		// should we check the address to make sure its using :443?
-		l, err = s.opts.ACMEProvider.NewListener(s.opts.ACMEHosts...)
+		l, err = s.opts.ACMEProvider.Listen(s.opts.ACMEHosts...)
 	} else if s.opts.EnableTLS && s.opts.TLSConfig != nil {
 		l, err = tls.Listen("tcp", s.address, s.opts.TLSConfig)
 	} else {
@@ -65,7 +65,7 @@ func (s *httpServer) Start() error {
 		return err
 	}
 
-	log.Logf("HTTP API Listening on %s", l.Addr().String())
+	log.Infof("HTTP API Listening on %s", l.Addr().String())
 
 	s.mtx.Lock()
 	s.address = l.Addr().String()
