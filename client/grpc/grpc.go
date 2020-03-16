@@ -18,11 +18,16 @@ import (
 	"github.com/micro/go-micro/v2/errors"
 	"github.com/micro/go-micro/v2/metadata"
 	"github.com/micro/go-micro/v2/registry"
+	"github.com/micro/go-micro/v2/util/config"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/encoding"
 	gmetadata "google.golang.org/grpc/metadata"
+)
+
+var (
+	BearerScheme = "Bearer "
 )
 
 type grpcClient struct {
@@ -118,7 +123,7 @@ func (g *grpcClient) call(ctx context.Context, node *registry.Node, req client.R
 	if md, ok := metadata.FromContext(ctx); ok {
 		header = make(map[string]string, len(md))
 		for k, v := range md {
-			header[k] = v
+			header[strings.ToLower(k)] = v
 		}
 	} else {
 		header = make(map[string]string)
@@ -128,6 +133,13 @@ func (g *grpcClient) call(ctx context.Context, node *registry.Node, req client.R
 	header["timeout"] = fmt.Sprintf("%d", opts.RequestTimeout)
 	// set the content type for the request
 	header["x-content-type"] = req.ContentType()
+
+	// set the authorization token if one is saved locally
+	if len(header["authorization"]) == 0 {
+		if token, err := config.Get("token"); err == nil && len(token) > 0 {
+			header["authorization"] = BearerScheme + token
+		}
+	}
 
 	md := gmetadata.New(header)
 	ctx = gmetadata.NewOutgoingContext(ctx, md)

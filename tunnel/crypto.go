@@ -14,35 +14,18 @@ var (
 	// gcmStandardNonceSize from crypto/cipher/gcm.go is 12 bytes
 	// 100 - is max size of pool
 	noncePool = bpool.NewBytePool(100, 12)
-	hashPool  = bpool.NewBytePool(1024*32, 32)
 )
 
 // hash hahes the data into 32 bytes key and returns it
 // hash uses sha256 underneath to hash the supplied key
-func hash(key string) []byte {
-	hasher := sha256.New()
-	hasher.Write([]byte(key))
-	out := hashPool.Get()
-	defer hashPool.Put(out[:0])
-	out = hasher.Sum(out[:0])
-	return out
+func hash(key []byte) []byte {
+	sum := sha256.Sum256(key)
+	return sum[:]
 }
 
 // Encrypt encrypts data and returns the encrypted data
-func Encrypt(data []byte, key string) ([]byte, error) {
-	// generate a new AES cipher using our 32 byte key
-	c, err := aes.NewCipher(hash(key))
-	if err != nil {
-		return nil, err
-	}
-
-	// gcm or Galois/Counter Mode, is a mode of operation
-	// for symmetric key cryptographic block ciphers
-	// - https://en.wikipedia.org/wiki/Galois/Counter_Mode
-	gcm, err := cipher.NewGCM(c)
-	if err != nil {
-		return nil, err
-	}
+func Encrypt(gcm cipher.AEAD, data []byte) ([]byte, error) {
+	var err error
 
 	// get new byte array the size of the nonce from pool
 	// NOTE: we might use smaller nonce size in the future
@@ -59,18 +42,28 @@ func Encrypt(data []byte, key string) ([]byte, error) {
 }
 
 // Decrypt decrypts the payload and returns the decrypted data
-func Decrypt(data []byte, key string) ([]byte, error) {
-	// generate AES cipher for decrypting the message
+func newCipher(key []byte) (cipher.AEAD, error) {
+	var err error
+
+	// generate a new AES cipher using our 32 byte key for decrypting the message
 	c, err := aes.NewCipher(hash(key))
 	if err != nil {
 		return nil, err
 	}
 
-	// we use GCM to encrypt the payload
+	// gcm or Galois/Counter Mode, is a mode of operation
+	// for symmetric key cryptographic block ciphers
+	// - https://en.wikipedia.org/wiki/Galois/Counter_Mode
 	gcm, err := cipher.NewGCM(c)
 	if err != nil {
 		return nil, err
 	}
+
+	return gcm, nil
+}
+
+func Decrypt(gcm cipher.AEAD, data []byte) ([]byte, error) {
+	var err error
 
 	nonceSize := gcm.NonceSize()
 
@@ -81,10 +74,10 @@ func Decrypt(data []byte, key string) ([]byte, error) {
 	// NOTE: we need to parse out nonce from the payload
 	// we prepend the nonce to every encrypted payload
 	nonce, ciphertext := data[:nonceSize], data[nonceSize:]
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	ciphertext, err = gcm.Open(ciphertext[:0], nonce, ciphertext, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	return plaintext, nil
+	return ciphertext, nil
 }

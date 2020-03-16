@@ -15,7 +15,7 @@ import (
 	"github.com/micro/go-micro/v2/broker"
 	"github.com/micro/go-micro/v2/codec"
 	raw "github.com/micro/go-micro/v2/codec/bytes"
-	log "github.com/micro/go-micro/v2/logger"
+	"github.com/micro/go-micro/v2/logger"
 	"github.com/micro/go-micro/v2/metadata"
 	"github.com/micro/go-micro/v2/registry"
 	"github.com/micro/go-micro/v2/transport"
@@ -158,8 +158,10 @@ func (s *rpcServer) ServeConn(sock transport.Socket) {
 
 		// recover any panics
 		if r := recover(); r != nil {
-			log.Error("panic recovered: ", r)
-			log.Error(string(debug.Stack()))
+			if logger.V(logger.ErrorLevel, log) {
+				log.Error("panic recovered: ", r)
+				log.Error(string(debug.Stack()))
+			}
 		}
 	}()
 
@@ -377,8 +379,10 @@ func (s *rpcServer) ServeConn(sock transport.Socket) {
 
 				// recover any panics for outbound process
 				if r := recover(); r != nil {
-					log.Error("panic recovered: ", r)
-					log.Error(string(debug.Stack()))
+					if logger.V(logger.ErrorLevel, log) {
+						log.Error("panic recovered: ", r)
+						log.Error(string(debug.Stack()))
+					}
 				}
 			}()
 
@@ -630,14 +634,17 @@ func (s *rpcServer) Register() error {
 	// set what we're advertising
 	s.opts.Advertise = addr
 
-	// subscribe to the topic with own name
-	sub, err := s.opts.Broker.Subscribe(config.Name, s.HandleEvent)
-	if err != nil {
-		return err
-	}
+	// router can exchange messages
+	if s.opts.Router != nil {
+		// subscribe to the topic with own name
+		sub, err := s.opts.Broker.Subscribe(config.Name, s.HandleEvent)
+		if err != nil {
+			return err
+		}
 
-	// save the subscriber
-	s.subscriber = sub
+		// save the subscriber
+		s.subscriber = sub
+	}
 
 	// subscribe for all of the subscribers
 	for sb := range s.subscribers {
@@ -654,11 +661,11 @@ func (s *rpcServer) Register() error {
 			opts = append(opts, broker.DisableAutoAck())
 		}
 
-		log.Infof("Subscribing to topic: %s", sub.Topic())
 		sub, err := config.Broker.Subscribe(sb.Topic(), s.HandleEvent, opts...)
 		if err != nil {
 			return err
 		}
+		log.Infof("Subscribing to topic: %s", sub.Topic())
 
 		s.subscribers[sb] = []broker.Subscriber{sub}
 	}

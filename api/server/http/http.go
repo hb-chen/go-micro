@@ -8,9 +8,12 @@ import (
 	"os"
 	"sync"
 
+	"github.com/micro/go-micro/v2/api/server/auth"
+
 	"github.com/gorilla/handlers"
 	"github.com/micro/go-micro/v2/api/server"
-	log "github.com/micro/go-micro/v2/logger"
+	"github.com/micro/go-micro/v2/api/server/cors"
+	"github.com/micro/go-micro/v2/logger"
 )
 
 type httpServer struct {
@@ -45,7 +48,14 @@ func (s *httpServer) Init(opts ...server.Option) error {
 }
 
 func (s *httpServer) Handle(path string, handler http.Handler) {
-	s.mux.Handle(path, handlers.CombinedLoggingHandler(os.Stdout, handler))
+	h := handlers.CombinedLoggingHandler(os.Stdout, handler)
+	h = auth.CombinedAuthHandler(handler)
+
+	if s.opts.EnableCORS {
+		h = cors.CombinedCORSHandler(h)
+	}
+
+	s.mux.Handle(path, h)
 }
 
 func (s *httpServer) Start() error {
@@ -65,7 +75,9 @@ func (s *httpServer) Start() error {
 		return err
 	}
 
-	log.Infof("HTTP API Listening on %s", l.Addr().String())
+	if logger.V(logger.InfoLevel, logger.DefaultLogger) {
+		logger.Infof("HTTP API Listening on %s", l.Addr().String())
+	}
 
 	s.mtx.Lock()
 	s.address = l.Addr().String()
@@ -74,7 +86,7 @@ func (s *httpServer) Start() error {
 	go func() {
 		if err := http.Serve(l, s.mux); err != nil {
 			// temporary fix
-			//log.Fatal(err)
+			//logger.Fatal(err)
 		}
 	}()
 

@@ -14,9 +14,10 @@ import (
 	"github.com/micro/go-micro/v2/debug/service/handler"
 	"github.com/micro/go-micro/v2/debug/stats"
 	"github.com/micro/go-micro/v2/debug/trace"
-	log "github.com/micro/go-micro/v2/logger"
+	"github.com/micro/go-micro/v2/logger"
 	"github.com/micro/go-micro/v2/plugin"
 	"github.com/micro/go-micro/v2/server"
+	"github.com/micro/go-micro/v2/store"
 	"github.com/micro/go-micro/v2/util/config"
 	"github.com/micro/go-micro/v2/util/wrapper"
 )
@@ -77,12 +78,12 @@ func (s *service) Init(opts ...Option) {
 			// load the plugin
 			c, err := plugin.Load(p)
 			if err != nil {
-				log.Fatal(err)
+				logger.Fatal(err)
 			}
 
 			// initialise the plugin
 			if err := plugin.Init(c); err != nil {
-				log.Fatal(err)
+				logger.Fatal(err)
 			}
 		}
 
@@ -98,10 +99,18 @@ func (s *service) Init(opts ...Option) {
 			cmd.Registry(&s.opts.Registry),
 			cmd.Transport(&s.opts.Transport),
 			cmd.Client(&s.opts.Client),
+			cmd.Config(&s.opts.Config),
 			cmd.Server(&s.opts.Server),
 			cmd.Profile(&s.opts.Profile),
 		); err != nil {
-			log.Fatal(err)
+			logger.Fatal(err)
+		}
+
+		// If the store has no namespace set, fallback to the
+		// services name
+		if len(store.DefaultStore.Options().Namespace) == 0 {
+			name := s.opts.Cmd.App().Name
+			store.DefaultStore.Init(store.Namespace(name))
 		}
 
 		// TODO: replace Cmd.Init with config.Load
@@ -194,7 +203,9 @@ func (s *service) Run() error {
 		defer s.opts.Profile.Stop()
 	}
 
-	log.Infof("Starting [service] %s", s.Name())
+	if logger.V(logger.InfoLevel, logger.DefaultLogger) {
+		logger.Infof("Starting [service] %s", s.Name())
+	}
 
 	if err := s.Start(); err != nil {
 		return err

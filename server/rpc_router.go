@@ -20,7 +20,6 @@ import (
 
 	"github.com/micro/go-micro/v2/codec"
 	merrors "github.com/micro/go-micro/v2/errors"
-	log "github.com/micro/go-micro/v2/logger"
 )
 
 var (
@@ -536,18 +535,6 @@ func (router *router) ProcessMessage(ctx context.Context, msg Message) (err erro
 			var req reflect.Value
 
 			// check whether the handler is a pointer
-			if handler.reqType.Kind() == reflect.Ptr {
-				req = reflect.New(handler.reqType.Elem())
-			} else {
-				req = reflect.New(handler.reqType)
-				isVal = true
-			}
-
-			// if its a value get the element
-			if isVal {
-				req = req.Elem()
-			}
-
 			if handler.reqType.Kind() == reflect.Ptr {
 				req = reflect.New(handler.reqType.Elem())
 			} else {

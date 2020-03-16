@@ -9,7 +9,7 @@ import (
 
 	"github.com/micro/go-micro/v2/broker"
 	"github.com/micro/go-micro/v2/errors"
-	log "github.com/micro/go-micro/v2/logger"
+	"github.com/micro/go-micro/v2/logger"
 	"github.com/micro/go-micro/v2/metadata"
 	"github.com/micro/go-micro/v2/registry"
 	"github.com/micro/go-micro/v2/server"
@@ -171,13 +171,20 @@ func (g *grpcServer) createSubHandler(sb *subscriber, opts server.Options) broke
 
 		defer func() {
 			if r := recover(); r != nil {
-				log.Error("panic recovered: ", r)
-				log.Error(string(debug.Stack()))
+				if logger.V(logger.ErrorLevel, logger.DefaultLogger) {
+					logger.Error("panic recovered: ", r)
+					logger.Error(string(debug.Stack()))
+				}
 				err = errors.InternalServerError("go.micro.server", "panic recovered: %v", r)
 			}
 		}()
 
 		msg := p.Message()
+		// if we don't have headers, create empty map
+		if msg.Header == nil {
+			msg.Header = make(map[string]string)
+		}
+
 		ct := msg.Header["Content-Type"]
 		if len(ct) == 0 {
 			msg.Header["Content-Type"] = defaultContentType
