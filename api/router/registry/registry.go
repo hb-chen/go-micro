@@ -4,15 +4,14 @@ package registry
 import (
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"regexp"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/micro/go-micro/v2/api"
 	"github.com/micro/go-micro/v2/api/router"
+	"github.com/micro/go-micro/v2/logger"
 	"github.com/micro/go-micro/v2/registry"
 	"github.com/micro/go-micro/v2/registry/cache"
 )
@@ -27,28 +26,6 @@ type registryRouter struct {
 
 	sync.RWMutex
 	eps map[string]*api.Service
-}
-
-func setNamespace(ns, name string) string {
-	ns = strings.TrimSpace(ns)
-	name = strings.TrimSpace(name)
-
-	// no namespace
-	if len(ns) == 0 {
-		return name
-	}
-
-	switch {
-	// has - suffix
-	case strings.HasSuffix(ns, "-"):
-		return strings.Replace(ns+name, ".", "-", -1)
-	// has . suffix
-	case strings.HasSuffix(ns, "."):
-		return ns + name
-	}
-
-	// default join .
-	return strings.Join([]string{ns, name}, ".")
 }
 
 func (r *registryRouter) isClosed() bool {
@@ -68,7 +45,9 @@ func (r *registryRouter) refresh() {
 		services, err := r.opts.Registry.ListServices()
 		if err != nil {
 			attempts++
-			log.Println("Error listing endpoints", err)
+			if logger.V(logger.ErrorLevel, logger.DefaultLogger) {
+				logger.Errorf("unable to list services: %v", err)
+			}
 			time.Sleep(time.Duration(attempts) * time.Second)
 			continue
 		}
@@ -77,12 +56,11 @@ func (r *registryRouter) refresh() {
 
 		// for each service, get service and store endpoints
 		for _, s := range services {
-			// only get services for this namespace
-			if !strings.HasPrefix(s.Name, r.opts.Namespace) {
-				continue
-			}
 			service, err := r.rc.GetService(s.Name)
 			if err != nil {
+				if logger.V(logger.ErrorLevel, logger.DefaultLogger) {
+					logger.Errorf("unable to get service: %v", err)
+				}
 				continue
 			}
 			r.store(service)
@@ -100,13 +78,16 @@ func (r *registryRouter) refresh() {
 // process watch event
 func (r *registryRouter) process(res *registry.Result) {
 	// skip these things
-	if res == nil || res.Service == nil || !strings.HasPrefix(res.Service.Name, r.opts.Namespace) {
+	if res == nil || res.Service == nil {
 		return
 	}
 
 	// get entry from cache
 	service, err := r.rc.GetService(res.Service.Name)
 	if err != nil {
+		if logger.V(logger.ErrorLevel, logger.DefaultLogger) {
+			logger.Errorf("unable to get service: %v", err)
+		}
 		return
 	}
 
@@ -136,6 +117,9 @@ func (r *registryRouter) store(services []*registry.Service) {
 
 			// if we got nothing skip
 			if err := api.Validate(end); err != nil {
+				if logger.V(logger.TraceLevel, logger.DefaultLogger) {
+					logger.Tracef("endpoint validation failed: %v", err)
+				}
 				continue
 			}
 
@@ -188,7 +172,9 @@ func (r *registryRouter) watch() {
 		w, err := r.opts.Registry.Watch()
 		if err != nil {
 			attempts++
-			log.Println("Error watching endpoints", err)
+			if logger.V(logger.ErrorLevel, logger.DefaultLogger) {
+				logger.Errorf("error watching endpoints: %v", err)
+			}
 			time.Sleep(time.Duration(attempts) * time.Second)
 			continue
 		}
@@ -211,7 +197,9 @@ func (r *registryRouter) watch() {
 			// process next event
 			res, err := w.Next()
 			if err != nil {
-				log.Println("Error getting next endpoint", err)
+				if logger.V(logger.ErrorLevel, logger.DefaultLogger) {
+					logger.Errorf("error getting next endoint: %v", err)
+				}
 				close(ch)
 				break
 			}
@@ -232,6 +220,14 @@ func (r *registryRouter) Close() error {
 		close(r.exit)
 		r.rc.Stop()
 	}
+	return nil
+}
+
+func (r *registryRouter) Register(ep *api.Endpoint) error {
+	return nil
+}
+
+func (r *registryRouter) Deregister(ep *api.Endpoint) error {
 	return nil
 }
 
@@ -327,7 +323,7 @@ func (r *registryRouter) Route(req *http.Request) (*api.Service, error) {
 	}
 
 	// service name
-	name := setNamespace(r.opts.Namespace, rp.Name)
+	name := rp.Name
 
 	// get service
 	services, err := r.rc.GetService(name)

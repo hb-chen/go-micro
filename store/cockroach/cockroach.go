@@ -10,16 +10,15 @@ import (
 	"time"
 
 	"github.com/lib/pq"
-	"github.com/micro/go-micro/v2/logger"
 	"github.com/micro/go-micro/v2/store"
 	"github.com/pkg/errors"
 )
 
-// DefaultNamespace is the namespace that the sql store
+// DefaultDatabase is the namespace that the sql store
 // will use if no namespace is provided.
 var (
-	DefaultNamespace = "micro"
-	DefaultPrefix    = "micro"
+	DefaultDatabase = "micro"
+	DefaultTable    = "micro"
 )
 
 type sqlStore struct {
@@ -36,6 +35,19 @@ type sqlStore struct {
 	delete     *sql.Stmt
 
 	options store.Options
+}
+
+func (s *sqlStore) Close() error {
+	closeStmt(s.delete)
+	closeStmt(s.list)
+	closeStmt(s.readMany)
+	closeStmt(s.readOffset)
+	closeStmt(s.readOne)
+	closeStmt(s.write)
+	if s.db != nil {
+		return s.db.Close()
+	}
+	return nil
 }
 
 func (s *sqlStore) Init(opts ...store.Option) error {
@@ -234,7 +246,7 @@ func (s *sqlStore) initDB() error {
 	}
 
 	// Create Index
-	_, err = s.db.Exec(fmt.Sprintf(`CREATE INDEX IF NOT EXISTS "%s" ON %s.%s USING btree ("key")`, "key_index_"+s.table, s.database, s.table))
+	_, err = s.db.Exec(fmt.Sprintf(`CREATE INDEX IF NOT EXISTS "%s" ON %s.%s USING btree ("key");`, "key_index_"+s.table, s.database, s.table))
 	if err != nil {
 		return err
 	}
@@ -243,33 +255,25 @@ func (s *sqlStore) initDB() error {
 	if err != nil {
 		return errors.Wrap(err, "List statement couldn't be prepared")
 	}
-	if s.list != nil {
-		s.list.Close()
-	}
+	closeStmt(s.list)
 	s.list = list
 	readOne, err := s.db.Prepare(fmt.Sprintf("SELECT key, value, expiry FROM %s.%s WHERE key = $1;", s.database, s.table))
 	if err != nil {
 		return errors.Wrap(err, "ReadOne statement couldn't be prepared")
 	}
-	if s.readOne != nil {
-		s.readOne.Close()
-	}
+	closeStmt(s.readOne)
 	s.readOne = readOne
 	readMany, err := s.db.Prepare(fmt.Sprintf("SELECT key, value, expiry FROM %s.%s WHERE key LIKE $1;", s.database, s.table))
 	if err != nil {
 		return errors.Wrap(err, "ReadMany statement couldn't be prepared")
 	}
-	if s.readMany != nil {
-		s.readMany.Close()
-	}
+	closeStmt(s.readMany)
 	s.readMany = readMany
 	readOffset, err := s.db.Prepare(fmt.Sprintf("SELECT key, value, expiry FROM %s.%s WHERE key LIKE $1 ORDER BY key DESC LIMIT $2 OFFSET $3;", s.database, s.table))
 	if err != nil {
 		return errors.Wrap(err, "ReadOffset statement couldn't be prepared")
 	}
-	if s.readOffset != nil {
-		s.readOffset.Close()
-	}
+	closeStmt(s.readOffset)
 	s.readOffset = readOffset
 	write, err := s.db.Prepare(fmt.Sprintf(`INSERT INTO %s.%s(key, value, expiry)
 		VALUES ($1, $2::bytea, $3)
@@ -279,36 +283,31 @@ func (s *sqlStore) initDB() error {
 	if err != nil {
 		return errors.Wrap(err, "Write statement couldn't be prepared")
 	}
-	if s.write != nil {
-		s.write.Close()
-	}
+	closeStmt(s.write)
 	s.write = write
 	delete, err := s.db.Prepare(fmt.Sprintf("DELETE FROM %s.%s WHERE key = $1;", s.database, s.table))
 	if err != nil {
 		return errors.Wrap(err, "Delete statement couldn't be prepared")
 	}
-	if s.delete != nil {
-		s.delete.Close()
-	}
+	closeStmt(s.delete)
 	s.delete = delete
 
 	return nil
 }
 
 func (s *sqlStore) configure() error {
-	nodes := s.options.Nodes
-	if len(nodes) == 0 {
-		nodes = []string{"localhost:26257"}
+	if len(s.options.Nodes) == 0 {
+		s.options.Nodes = []string{"postgresql://root@localhost:26257?sslmode=disable"}
 	}
 
-	namespace := s.options.Namespace
-	if len(namespace) == 0 {
-		namespace = DefaultNamespace
+	database := s.options.Database
+	if len(database) == 0 {
+		database = DefaultDatabase
 	}
 
-	prefix := s.options.Prefix
-	if len(prefix) == 0 {
-		prefix = DefaultPrefix
+	table := s.options.Table
+	if len(table) == 0 {
+		table = DefaultTable
 	}
 
 	// store.namespace must only contain letters, numbers and underscores
@@ -316,9 +315,10 @@ func (s *sqlStore) configure() error {
 	if err != nil {
 		return errors.New("error compiling regex for namespace")
 	}
-	namespace = reg.ReplaceAllString(namespace, "_")
+	database = reg.ReplaceAllString(database, "_")
+	table = reg.ReplaceAllString(table, "_")
 
-	source := nodes[0]
+	source := s.options.Nodes[0]
 	// check if it is a standard connection string eg: host=%s port=%d user=%s password=%s dbname=%s sslmode=disable
 	// if err is nil which means it would be a URL like postgre://xxxx?yy=zz
 	_, err = url.Parse(source)
@@ -344,8 +344,8 @@ func (s *sqlStore) configure() error {
 
 	// save the values
 	s.db = db
-	s.database = namespace
-	s.table = prefix
+	s.database = database
+	s.table = table
 
 	// initialise the database
 	return s.initDB()
@@ -371,11 +371,15 @@ func NewStore(opts ...store.Option) store.Store {
 	// set the options
 	s.options = options
 
-	// configure the store
-	if err := s.configure(); err != nil {
-		logger.Fatal(err)
-	}
+	// best-effort configure the store
+	s.configure()
 
 	// return store
 	return s
+}
+
+func closeStmt(s *sql.Stmt) {
+	if s != nil {
+		s.Close()
+	}
 }

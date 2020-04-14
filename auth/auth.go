@@ -39,8 +39,8 @@ type Auth interface {
 	Verify(acc *Account, res *Resource) error
 	// Inspect a token
 	Inspect(token string) (*Account, error)
-	// Refresh an account using a secret
-	Refresh(secret string, opts ...RefreshOption) (*Token, error)
+	// Token generated using refresh token
+	Token(opts ...TokenOption) (*Token, error)
 	// String returns the name of the implementation
 	String() string
 }
@@ -48,50 +48,56 @@ type Auth interface {
 // Resource is an entity such as a user or
 type Resource struct {
 	// Name of the resource
-	Name string
+	Name string `json:"name"`
 	// Type of resource, e.g.
-	Type string
+	Type string `json:"type"`
 	// Endpoint resource e.g NotesService.Create
-	Endpoint string
+	Endpoint string `json:"endpoint"`
+	// Namespace the resource belongs to
+	Namespace string `json:"namespace"`
 }
 
 // Account provided by an auth provider
 type Account struct {
-	// ID of the account (UUIDV4, email or username)
+	// ID of the account e.g. email
 	ID string `json:"id"`
-	// Secret used to renew the account
-	Secret *Token `json:"secret"`
+	// Type of the account, e.g. service
+	Type string `json:"type"`
+	// Provider who issued the account
+	Provider string `json:"provider"`
 	// Roles associated with the Account
 	Roles []string `json:"roles"`
 	// Any other associated metadata
 	Metadata map[string]string `json:"metadata"`
+	// Namespace the account belongs to
+	Namespace string `json:"namespace"`
+	// Secret for the account, e.g. the password
+	Secret string `json:"secret"`
 }
 
 // Token can be short or long lived
 type Token struct {
-	// The token itself
-	Token string `json:"token"`
-	// Type of token, e.g. JWT
-	Type string `json:"type"`
+	// The token to be used for accessing resources
+	AccessToken string `json:"access_token"`
+	// RefreshToken to be used to generate a new token
+	RefreshToken string `json:"refresh_token"`
 	// Time of token creation
 	Created time.Time `json:"created"`
 	// Time of token expiry
 	Expiry time.Time `json:"expiry"`
-	// Subject of the token, e.g. the account ID
-	Subject string `json:"subject"`
-	// Roles granted to the token
-	Roles []string `json:"roles"`
-	// Metadata embedded in the token
-	Metadata map[string]string `json:"metadata"`
 }
 
 const (
+	// DefaultNamespace used for auth
+	DefaultNamespace = "go.micro"
 	// MetadataKey is the key used when storing the account in metadata
 	MetadataKey = "auth-account"
 	// TokenCookieName is the name of the cookie which stores the auth token
 	TokenCookieName = "micro-token"
 	// SecretCookieName is the name of the cookie which stores the auth secret
 	SecretCookieName = "micro-secret"
+	// BearerScheme used for Authorization header
+	BearerScheme = "Bearer "
 )
 
 // AccountFromContext gets the account from the context, which
